@@ -23,10 +23,10 @@ set -e
 # ─────────────────────────────────────────────────────────────────────────────
 
 SERVER="root@147.79.114.76"
-GITHUB_REPO="https://github.com/msufyanabbas/tawal-smart-sites.git"
+GITHUB_REPO="https://github.com/smartlifeIOT/tawal-smart-sites"
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REMOTE_DIR="~/tawal-package"
-FRONTEND_API_URL="https://tawal.smart-life.sa"
+FRONTEND_API_URL="https://tawal-site.smart-life.sa"
 
 # StrictHostKeyChecking=no is intentional: with password auth and no pinned
 # known_hosts entry, this avoids interactive host-key prompts on first

@@ -1,0 +1,674 @@
+import { useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Controller, useForm, useWatch } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import toast from "react-hot-toast";
+
+import { TextField } from "@/components/TextField";
+import { SelectField } from "@/components/SelectField";
+import { Button } from "@/components/Button";
+import { FullPageSpinner } from "@/components/Spinner";
+import { useSiteQuery, useUpdateSiteMutation } from "@/hooks/useSites";
+import {
+  deriveCounts,
+  smartMetersFor,
+  siteCreateSchema,
+  type SiteCreateValues,
+} from "@/utils/siteSchema";
+import { RmsScope, type SiteUpdatePayload } from "@/types";
+import { apiErrorMessage, rmsScopeLabel } from "@/utils/helpers";
+
+// ── Predefined item code mapping ────────────────────────────────────────────
+// Each code maps to a specific piece of equipment used in GCL generation.
+const ITEM_CODE = {
+  RMS: "Smart-TWR-001",
+  EXPANDER: "Smart-TWR-007",
+  FENCE_LOCK: "Smart-TWR-0025",
+  ODU: "Smart-TWR-0027",
+  SMART_METER: "Smart-TWR-0023",
+  CCTV_CAMERA: "CCTV-001",
+  HARD_DISK: "CCTV-006",
+  NVR: "CCTV-002",
+} as const;
+
+/** Returns the ordered list of item codes for the current form state.
+ * A code is only included when its corresponding count is > 0. */
+function deriveItemCodes(
+  scope: RmsScope | undefined,
+  opts: {
+    numberOfRms?: number;
+    numberOfExpanders?: number;
+    hasSmartLock?: boolean;
+    numberOfFenceLocks?: number;
+    numberOfOdus?: number;
+    hasSmartMeter?: boolean;
+    numberOfTenants?: number;
+    numberOfCameras?: number;
+    numberOfHardDisks?: number;
+    numberOfNvr?: number;
+  },
+): string[] {
+  if (!scope) return [];
+  const codes: string[] = [];
+  const gt0 = (n?: number) => (n ?? 0) > 0;
+
+  if (scope === RmsScope.RMS) {
+    if (gt0(opts.numberOfRms)) codes.push(ITEM_CODE.RMS);
+    if (gt0(opts.numberOfExpanders)) codes.push(ITEM_CODE.EXPANDER);
+    if (opts.hasSmartLock) {
+      if (gt0(opts.numberOfFenceLocks)) codes.push(ITEM_CODE.FENCE_LOCK);
+      if (gt0(opts.numberOfOdus)) codes.push(ITEM_CODE.ODU);
+    }
+    if (opts.hasSmartMeter && gt0(opts.numberOfTenants))
+      codes.push(ITEM_CODE.SMART_METER);
+  } else if (scope === RmsScope.SMART_LOCK) {
+    if (gt0(opts.numberOfFenceLocks)) codes.push(ITEM_CODE.FENCE_LOCK);
+    if (gt0(opts.numberOfOdus)) codes.push(ITEM_CODE.ODU);
+  } else if (scope === RmsScope.SMART_METER) {
+    if (gt0(opts.numberOfTenants)) codes.push(ITEM_CODE.SMART_METER);
+  } else if (scope === RmsScope.SIM_SWAP) {
+    if (opts.hasSmartMeter && gt0(opts.numberOfTenants))
+      codes.push(ITEM_CODE.SMART_METER);
+  } else if (scope === RmsScope.CCTV) {
+    if (gt0(opts.numberOfCameras)) codes.push(ITEM_CODE.CCTV_CAMERA);
+    if (gt0(opts.numberOfHardDisks)) codes.push(ITEM_CODE.HARD_DISK);
+    if (gt0(opts.numberOfNvr)) codes.push(ITEM_CODE.NVR);
+  } else if (scope === RmsScope.LEGACY_POO_METER) {
+    if (gt0(opts.numberOfTenants)) codes.push(ITEM_CODE.SMART_METER);
+  } else if (scope === RmsScope.COLLOCATION_METER) {
+    if (gt0(opts.numberOfTenants)) codes.push(ITEM_CODE.SMART_METER);
+    if (gt0(opts.numberOfFenceLocks)) codes.push(ITEM_CODE.FENCE_LOCK);
+    if (gt0(opts.numberOfOdus)) codes.push(ITEM_CODE.ODU);
+  }
+  return codes;
+}
+
+const ToggleField: React.FC<{
+  label: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+}> = ({ label, value, onChange }) => (
+  <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+    <input
+      type="checkbox"
+      checked={value}
+      onChange={(e) => onChange(e.target.checked)}
+      className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+    />
+    {label}
+  </label>
+);
+
+const ReadOnlyStat: React.FC<{ label: string; value: number }> = ({
+  label,
+  value,
+}) => (
+  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+    <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+    <p className="mt-0.5 text-lg font-semibold text-slate-800">{value}</p>
+  </div>
+);
+
+export const EditSitePage: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { data: site, isLoading, error } = useSiteQuery(id);
+  const update = useUpdateSiteMutation();
+
+  const form = useForm<SiteCreateValues>({
+    resolver: zodResolver(siteCreateSchema),
+  });
+
+  const { register, control, handleSubmit, formState, reset, setValue } = form;
+
+  // Seed the form once the site is loaded.
+  useEffect(() => {
+    if (!site) return;
+    reset({
+      siteName: site.siteName,
+      tawalId: site.tawalId,
+      region: site.region,
+      siteCity: site.siteCity,
+      tcnNumber: site.tcnNumber,
+      rmsScope: site.rmsScope,
+      itemCode: site.itemCode,
+      numberOfRms: site.numberOfRms,
+      numberOfExpanders: site.numberOfExpanders,
+      numberOfSims: site.numberOfSims,
+      hasSmartLock: site.hasSmartLock,
+      numberOfFenceLocks: site.numberOfFenceLocks,
+      numberOfOdus: site.numberOfOdus,
+      hasSmartMeter: site.hasSmartMeter,
+      numberOfTenants: site.numberOfTenants,
+      numberOfCameras: site.numberOfCameras,
+      numberOfHardDisks: site.numberOfHardDisks,
+      numberOfNvr: site.numberOfNvr,
+      simSwapSiteType: site.simSwapSiteType,
+      simSwapLatitude: site.simSwapLatitude ?? undefined,
+      simSwapLongitude: site.simSwapLongitude ?? undefined,
+    });
+  }, [site, reset]);
+
+  const scope = useWatch({ control, name: "rmsScope" });
+  const hasSmartLock = useWatch({ control, name: "hasSmartLock" });
+  const hasSmartMeter = useWatch({ control, name: "hasSmartMeter" });
+  const tenants = useWatch({ control, name: "numberOfTenants" });
+  const numberOfRms = useWatch({ control, name: "numberOfRms" });
+  const numberOfExpanders = useWatch({ control, name: "numberOfExpanders" });
+  const numberOfFenceLocks = useWatch({ control, name: "numberOfFenceLocks" });
+  const numberOfOdus = useWatch({ control, name: "numberOfOdus" });
+  const numberOfCameras = useWatch({ control, name: "numberOfCameras" });
+  const numberOfHardDisks = useWatch({ control, name: "numberOfHardDisks" });
+  const numberOfNvr = useWatch({ control, name: "numberOfNvr" });
+
+  const derived = deriveCounts(scope, tenants);
+
+  // Auto-compute itemCode whenever scope, toggles, or counts change.
+  const itemCodes = deriveItemCodes(scope, {
+    numberOfRms,
+    numberOfExpanders,
+    hasSmartLock,
+    numberOfFenceLocks,
+    numberOfOdus,
+    hasSmartMeter,
+    numberOfTenants: tenants,
+    numberOfCameras,
+    numberOfHardDisks,
+    numberOfNvr,
+  });
+
+  useEffect(() => {
+    setValue("itemCode", itemCodes.join(","), { shouldDirty: false });
+  }, [
+    scope,
+    hasSmartLock,
+    hasSmartMeter,
+    numberOfRms,
+    numberOfExpanders,
+    numberOfFenceLocks,
+    numberOfOdus,
+    tenants,
+    numberOfCameras,
+    numberOfHardDisks,
+    numberOfNvr,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (isLoading) return <FullPageSpinner />;
+  if (error || !site) {
+    return (
+      <div className="card border-red-200 bg-red-50">
+        <div className="card-body text-sm text-red-700">
+          {apiErrorMessage(error, "Site not found")}
+        </div>
+      </div>
+    );
+  }
+
+  const onSubmit = async (values: SiteCreateValues) => {
+    console.log(values);
+    const payload: SiteUpdatePayload = {
+      siteName: values.siteName,
+      tawalId: values.tawalId,
+      region: values.region,
+      siteCity: values.siteCity,
+      tcnNumber: values.tcnNumber,
+      rmsScope: values.rmsScope,
+      itemCode: values.itemCode,
+    };
+    if (values.rmsScope === RmsScope.RMS) {
+      payload.numberOfRms = values.numberOfRms ?? 0;
+      payload.numberOfExpanders = values.numberOfExpanders ?? 0;
+      payload.numberOfSims = values.numberOfSims ?? 0;
+      payload.hasSmartLock = !!values.hasSmartLock;
+      if (values.hasSmartLock) {
+        payload.numberOfFenceLocks = values.numberOfFenceLocks ?? 0;
+        payload.numberOfOdus = values.numberOfOdus ?? 0;
+      }
+      payload.hasSmartMeter = !!values.hasSmartMeter;
+      if (values.hasSmartMeter) {
+        payload.numberOfTenants = values.numberOfTenants ?? 0;
+        payload.numberOfSmartMeters = smartMetersFor(
+          values.numberOfTenants ?? 0,
+          values.rmsScope,
+        );
+      }
+    } else if (values.rmsScope === RmsScope.SMART_LOCK) {
+      payload.numberOfFenceLocks = values.numberOfFenceLocks ?? 0;
+      payload.numberOfOdus = values.numberOfOdus ?? 0;
+    } else if (values.rmsScope === RmsScope.SMART_METER) {
+      payload.numberOfTenants = values.numberOfTenants ?? 0;
+      payload.numberOfSmartMeters = smartMetersFor(
+        values.numberOfTenants ?? 0,
+        values.rmsScope,
+      );
+    } else if (values.rmsScope === RmsScope.RMS_SERVICE) {
+      payload.numberOfTenants = values.numberOfTenants ?? 0;
+    } else if (values.rmsScope === RmsScope.SIM_SWAP) {
+      payload.numberOfSims = values.numberOfSims ?? 0;
+      payload.hasSmartMeter = !!values.hasSmartMeter;
+      if (values.hasSmartMeter) {
+        payload.numberOfTenants = values.numberOfTenants ?? 0;
+        payload.numberOfSmartMeters = smartMetersFor(
+          values.numberOfTenants ?? 0,
+          values.rmsScope,
+        );
+      }
+    } else if (values.rmsScope === RmsScope.CCTV) {
+      payload.numberOfCameras = values.numberOfCameras ?? 0;
+      payload.numberOfHardDisks = values.numberOfHardDisks ?? 0;
+      payload.numberOfNvr = values.numberOfNvr ?? 0;
+    } else if (values.rmsScope === RmsScope.LEGACY_POO_METER) {
+      payload.numberOfTenants = values.numberOfTenants ?? 0;
+      payload.numberOfSmartMeters = smartMetersFor(
+        values.numberOfTenants ?? 0,
+        values.rmsScope,
+      );
+    } else if (values.rmsScope === RmsScope.COLLOCATION_METER) {
+      payload.numberOfTenants = values.numberOfTenants ?? 0;
+      payload.numberOfFenceLocks = values.numberOfFenceLocks ?? 0;
+      payload.numberOfOdus = values.numberOfOdus ?? 0;
+      payload.numberOfSmartMeters = smartMetersFor(
+        values.numberOfTenants ?? 0,
+        values.rmsScope,
+      );
+    }
+    try {
+      await update.mutateAsync({ id: site._id, payload });
+
+      toast.success("Site updated");
+      navigate(`/sites/${site._id}`, { replace: true });
+    } catch (err) {
+      toast.error(apiErrorMessage(err, "Failed to update site"));
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <header>
+        <h1 className="text-2xl font-bold text-slate-900">Edit site</h1>
+        <p className="text-sm text-slate-500">
+          Editing <span className="font-medium">{site.siteName}</span>. Counts
+          that are derived from other values update automatically when you save.
+        </p>
+      </header>
+
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-5" noValidate>
+        <div className="card">
+          <div className="card-body space-y-4">
+            <h2 className="card-title">Site information</h2>
+            <div className="grid gap-4 md:grid-cols-2">
+              <TextField
+                label="Site name *"
+                {...register("siteName")}
+                error={formState.errors.siteName?.message}
+              />
+              <TextField
+                label="Tawal ID *"
+                inputMode="numeric"
+                pattern="\d*"
+                placeholder="Digits only"
+                {...register("tawalId")}
+                error={formState.errors.tawalId?.message}
+              />
+              <TextField
+                label="Region *"
+                placeholder="e.g. North, Central, Riyadh Cluster"
+                {...register("region")}
+                error={formState.errors.region?.message}
+              />
+              <TextField
+                label="City *"
+                placeholder="e.g. Riyadh"
+                {...register("siteCity")}
+                error={formState.errors.siteCity?.message}
+              />
+              <TextField
+                label="TCN number *"
+                {...register("tcnNumber")}
+                error={formState.errors.tcnNumber?.message}
+              />
+              <SelectField
+                label="RMS scope *"
+                placeholder="Select scope"
+                {...register("rmsScope")}
+                error={formState.errors.rmsScope?.message}
+                options={Object.values(RmsScope).map((s) => ({
+                  value: s,
+                  label: rmsScopeLabel(s),
+                }))}
+              />
+            </div>
+          </div>
+        </div>
+
+        {scope && (
+          <div className="card">
+            <div className="card-body space-y-4">
+              <h2 className="card-title">{rmsScopeLabel(scope)} details</h2>
+
+              {/* Auto-derived item codes — read-only display */}
+              {itemCodes.length > 0 && (
+                <div>
+                  <p className="label">Item codes (auto-generated for GCL)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {itemCodes.map((code) => (
+                      <span
+                        key={code}
+                        className="inline-flex items-center rounded-full text-white bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700 ring-1 ring-brand-200"
+                      >
+                        {code}
+                      </span>
+                    ))}
+                  </div>
+                  {/* Hidden input keeps the value in the form state */}
+                  <input type="hidden" {...register("itemCode")} />
+                </div>
+              )}
+
+              {scope === RmsScope.RMS && (
+                <>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of RMS units"
+                      {...register("numberOfRms", { valueAsNumber: true })}
+                    />
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of expanders"
+                      {...register("numberOfExpanders", {
+                        valueAsNumber: true,
+                      })}
+                    />
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of SIMs"
+                      {...register("numberOfSims", { valueAsNumber: true })}
+                    />
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <Controller
+                      control={control}
+                      name="hasSmartLock"
+                      render={({ field }) => (
+                        <ToggleField
+                          label="Includes smart lock"
+                          value={!!field.value}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                    {hasSmartLock && (
+                      <div className="mt-3 grid gap-4 md:grid-cols-2">
+                        <TextField
+                          type="number"
+                          min={0}
+                          label="Number of fence locks"
+                          {...register("numberOfFenceLocks", {
+                            valueAsNumber: true,
+                          })}
+                        />
+                        <TextField
+                          type="number"
+                          min={0}
+                          label="Number of ODUs"
+                          {...register("numberOfOdus", { valueAsNumber: true })}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <Controller
+                      control={control}
+                      name="hasSmartMeter"
+                      render={({ field }) => (
+                        <ToggleField
+                          label="Includes smart meter"
+                          value={!!field.value}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                    {hasSmartMeter && (
+                      <>
+                        <div className="mt-3 grid gap-4 md:grid-cols-3">
+                          <TextField
+                            type="number"
+                            min={0}
+                            label="Number of tenants"
+                            {...register("numberOfTenants", {
+                              valueAsNumber: true,
+                            })}
+                          />
+                        </div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          <ReadOnlyStat
+                            label="Smart meters (computed)"
+                            value={derived.smartMeters}
+                          />
+                          <ReadOnlyStat
+                            label="CT splits (computed)"
+                            value={derived.ctSplits}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {scope === RmsScope.SMART_LOCK && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of fence locks"
+                    {...register("numberOfFenceLocks", { valueAsNumber: true })}
+                  />
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of ODUs"
+                    {...register("numberOfOdus", { valueAsNumber: true })}
+                  />
+                </div>
+              )}
+
+              {scope === RmsScope.SMART_METER && (
+                <>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of tenants"
+                      {...register("numberOfTenants", { valueAsNumber: true })}
+                    />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <ReadOnlyStat
+                      label="Smart meters (computed)"
+                      value={derived.smartMeters}
+                    />
+                    <ReadOnlyStat
+                      label="CT splits (computed)"
+                      value={derived.ctSplits}
+                    />
+                    <ReadOnlyStat
+                      label="Silbo gateways (fixed)"
+                      value={derived.silboGateways}
+                    />
+                    <ReadOnlyStat
+                      label="SIM cards (fixed)"
+                      value={derived.sims}
+                    />
+                  </div>
+                </>
+              )}
+
+              {scope === RmsScope.RMS_SERVICE && (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of tenants"
+                    {...register("numberOfTenants", { valueAsNumber: true })}
+                  />
+                </div>
+              )}
+
+              {scope === RmsScope.CCTV && (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of CCTV cameras"
+                    {...register("numberOfCameras", { valueAsNumber: true })}
+                  />
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of hard disks"
+                    {...register("numberOfHardDisks", { valueAsNumber: true })}
+                  />
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of NVR"
+                    {...register("numberOfNvr", { valueAsNumber: true })}
+                  />
+                </div>
+              )}
+
+              {scope === RmsScope.SIM_SWAP && (
+                <div className="space-y-4">
+                  <TextField
+                    type="number"
+                    min={0}
+                    label="Number of SIM cards"
+                    {...register("numberOfSims", { valueAsNumber: true })}
+                  />
+
+                  <div className="rounded-lg border border-slate-200 p-4">
+                    <Controller
+                      control={control}
+                      name="hasSmartMeter"
+                      render={({ field }) => (
+                        <ToggleField
+                          label="Includes smart meter"
+                          value={!!field.value}
+                          onChange={field.onChange}
+                        />
+                      )}
+                    />
+                    {hasSmartMeter && (
+                      <>
+                        <div className="mt-3 grid gap-4 md:grid-cols-3">
+                          <TextField
+                            type="number"
+                            min={0}
+                            label="Number of tenants"
+                            {...register("numberOfTenants", {
+                              valueAsNumber: true,
+                            })}
+                          />
+                        </div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          <ReadOnlyStat
+                            label="Smart meters (computed)"
+                            value={derived.smartMeters}
+                          />
+                          <ReadOnlyStat
+                            label="CT splits (computed)"
+                            value={derived.ctSplits}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {scope === RmsScope.LEGACY_POO_METER && (
+                <>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of tenants"
+                      {...register("numberOfTenants", { valueAsNumber: true })}
+                    />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ReadOnlyStat
+                      label="Smart meters (computed)"
+                      value={derived.smartMeters}
+                    />
+                    <ReadOnlyStat
+                      label="CT splits (computed)"
+                      value={derived.ctSplits}
+                    />
+                  </div>
+                </>
+              )}
+
+              {scope === RmsScope.COLLOCATION_METER && (
+                <>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of tenants"
+                      {...register("numberOfTenants", { valueAsNumber: true })}
+                    />
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of fence locks"
+                      {...register("numberOfFenceLocks", {
+                        valueAsNumber: true,
+                      })}
+                    />
+                    <TextField
+                      type="number"
+                      min={0}
+                      label="Number of ODUs"
+                      {...register("numberOfOdus", { valueAsNumber: true })}
+                    />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <ReadOnlyStat
+                      label="Smart meters (computed)"
+                      value={derived.smartMeters}
+                    />
+                    <ReadOnlyStat
+                      label="CT splits (computed)"
+                      value={derived.ctSplits}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => navigate(`/sites/${site._id}`)}
+          >
+            Cancel
+          </Button>
+          <Button type="submit" loading={update.isPending}>
+            Save changes
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+};
